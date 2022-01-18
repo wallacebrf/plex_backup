@@ -13,8 +13,6 @@ moves the .tar to a final archiving directory of your choosing
 
 restarts plex
 
-send an email with logs of the entire process
-
 the primary user controllable variables are:
 
 #plex variables
@@ -29,3 +27,4 @@ log_file_location="/volume1/web/logging/notifications/plex_docker_backup.txt"
 "log_file_location" where on the system would you like the log file stored
 
 to install, copy the file to a desired location on the system and use Task Scheduler under the control panel to set the script to run when desired. ensure the script runs as root. 
+if an email of the results is desired, use synology task scheduler and choose the option to send an email notiifcation 
