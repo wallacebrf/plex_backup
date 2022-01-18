@@ -1,17 +1,20 @@
 #!/bin/bash
 
-#create a lock file in the ramdisk directory to prevent more than one instance of this script from executing  at once
-if ! mkdir /volume1/web/logging/notifications/plex_docker_backup.lock; then
-	echo "Failed to acquire lock.\n" >&2
-	exit 1
-fi
-trap 'rm -rf /volume1/web/logging/notifications/plex_docker_backup.lock' EXIT #remove the lockdir on exit
-
 #plex variables
 plex_backup_dir="/volume1/Server2/Backups/Plex"
 PMS_IP='192.168.1.200'
 plex_installed_volume="volume1"
-log_file_location="/volume1/web/logging/notifications/plex_docker_backup.txt"
+log_file_location="/volume1/web/logging/notifications/plex_backup.txt"
+lock_file_location="/volume1/web/logging/notifications/plex_backup.lock"
+
+#create a lock file in the ramdisk directory to prevent more than one instance of this script from executing  at once
+if ! mkdir $lock_file_location; then
+	echo "Failed to acquire lock.\n" >&2
+	exit 1
+fi
+trap 'rm -rf $lock_file_location' EXIT #remove the lockdir on exit
+
+
 
 #setup log file
 echo "Beginning backup of 
@@ -114,7 +117,7 @@ plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
 if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
 	echo "PLEX Media Server Shutdown Failed, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
 else
-	echo "PLEX Media Server Shutdown Successfuly" |& tee -a $log_file_location
+	echo "PLEX Media Server Shutdown Successfully" |& tee -a $log_file_location
 	if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
 		echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
 	else
