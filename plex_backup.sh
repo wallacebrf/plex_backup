@@ -6,6 +6,17 @@ PMS_IP='192.168.1.200'
 plex_installed_volume="volume1"
 log_file_location="/volume1/web/logging/notifications/plex_backup.txt"
 lock_file_location="/volume1/web/logging/notifications/plex_backup.lock"
+installation_type=0 #0 for native plex app, 1 for DOCKER
+
+
+#if using docker edit these parameters, otherwise they can be ignored. 
+docker_container_name="plex" #edit to match the name of your PLEX docker container 
+plex_library_directory_location="/$plex_installed_volume/Plex"
+folder_name_to_backup="AppData"
+plex_Preferences_loction="PlexMediaServer/AppData/Plex Media Server/Preferences.xml"
+
+
+
 
 #create a lock file in the ramdisk directory to prevent more than one instance of this script from executing  at once
 if ! mkdir $lock_file_location; then
@@ -20,26 +31,28 @@ trap 'rm -rf $lock_file_location' EXIT #remove the lockdir on exit
 echo "Beginning backup of 
 PLEX Data" |& tee $log_file_location
 
-#determine DSM version to ensure the DSM6 vs DSM7 version of the synology PLEX package is downloaded
-DSMVersion=$(                   cat /etc.defaults/VERSION | grep -i 'productversion=' | cut -d"\"" -f 2)
+if [ $installation_type -eq 0 ]; then
+	#determine DSM version to ensure the DSM6 vs DSM7 version of the synology PLEX package is downloaded
+	DSMVersion=$(                   cat /etc.defaults/VERSION | grep -i 'productversion=' | cut -d"\"" -f 2)
 
-echo "" |& tee -a $log_file_location
-MinDSMVersion=7.0
-/usr/bin/dpkg --compare-versions "$MinDSMVersion" gt "$DSMVersion"
-if [ "$?" -eq "0" ]; then
-	echo "DSM version is 6.x.x"
-	echo "Current DSM Version Installed: $DSMVersion"
-	plex_library_directory_location="/$plex_installed_volume/Plex"
-	folder_name_to_backup="Library"
-	plex_package_name="Plex Media Server"
-	plex_Preferences_loction="Plex/Library/Application Support/Plex Media Server/Preferences.xml"
-else
-	echo "DSM version is 7.x.x"
-	echo "Current DSM Version Installed: $DSMVersion"
-	plex_library_directory_location="/$plex_installed_volume/PlexMediaServer"
-	folder_name_to_backup="AppData"
-	plex_package_name="PlexMediaServer"
-	plex_Preferences_loction="PlexMediaServer/AppData/Plex Media Server/Preferences.xml"
+	echo "" |& tee -a $log_file_location
+	MinDSMVersion=7.0
+	/usr/bin/dpkg --compare-versions "$MinDSMVersion" gt "$DSMVersion"
+	if [ "$?" -eq "0" ]; then
+		echo "DSM version is 6.x.x"
+		echo "Current DSM Version Installed: $DSMVersion"
+		plex_library_directory_location="/$plex_installed_volume/Plex"
+		folder_name_to_backup="Library"
+		plex_package_name="Plex Media Server"
+		plex_Preferences_loction="Plex/Library/Application Support/Plex Media Server/Preferences.xml"
+	else
+		echo "DSM version is 7.x.x"
+		echo "Current DSM Version Installed: $DSMVersion"
+		plex_library_directory_location="/$plex_installed_volume/PlexMediaServer"
+		folder_name_to_backup="AppData"
+		plex_package_name="PlexMediaServer"
+		plex_Preferences_loction="PlexMediaServer/AppData/Plex Media Server/Preferences.xml"
+	fi
 fi
 		
 #####################################
@@ -94,54 +107,106 @@ sleep 1
 #####################################
 #Stop plex package
 #####################################
-plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
-if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
-	echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, PLEX shutdown aborting" |& tee -a $log_file_location
-else
-	if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
-		echo |& tee -a $log_file_location
-		echo "Stopping PLEX Media Server...." |& tee -a $log_file_location
-		/usr/syno/bin/synopkg stop "$plex_package_name" |& tee -a $log_file_location
-		sleep 1
+if [ $installation_type -eq 0 ]; then
+	plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
+	if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+		echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, PLEX shutdown aborting" |& tee -a $log_file_location
 	else
-		echo "PLEX Media Server Already Shutdown" |& tee -a $log_file_location
+		if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
+			echo |& tee -a $log_file_location
+			echo "Stopping PLEX Media Server...." |& tee -a $log_file_location
+			/usr/syno/bin/synopkg stop "$plex_package_name" |& tee -a $log_file_location
+			sleep 1
+		else
+			echo "PLEX Media Server Already Shutdown" |& tee -a $log_file_location
+		fi
+	fi
+else
+	if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+		echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, PLEX shutdown aborting" |& tee -a $log_file_location
+	else
+		if [ "$( docker container inspect -f '{{.State.Status}}' $docker_container_name )" == "running" ]; then
+			echo "Stopping Docker Container $docker_container_name" |& tee -a $log_file_location
+			docker stop $docker_container_name |& tee -a $log_file_location
+			sleep 1
+		else
+			echo "PLEX Media Server Already Shutdown" |& tee -a $log_file_location
+		fi
 	fi
 fi
 
 
 #####################################
-#Backup plex data directory
+#Backup plex data directory Native App
 #####################################
-plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
+if [ $installation_type -eq 0 ]; then
+	plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
 
-if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
-	echo "PLEX Media Server Shutdown Failed, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
-else
-	echo "PLEX Media Server Shutdown Successfully" |& tee -a $log_file_location
-	if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
-		echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
+	if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
+		echo "PLEX Media Server Shutdown Failed, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
 	else
-		cd $plex_library_directory_location
-		current_dir=$(pwd)
-		if [ "$current_dir" = "$plex_library_directory_location" ]; then
-			now=$(date +"%T")
-			echo "$now - Backing up PLEX \"$folder_name_to_backup\" Directory.... This may take a while" |& tee -a $log_file_location
-			tar cf Library_$DATE.tar "$folder_name_to_backup"  |& tee -a $log_file_location
-			if [ -f "$plex_library_directory_location/Library_$DATE.tar" ]; then
+		echo "PLEX Media Server Shutdown Successfully" |& tee -a $log_file_location
+		if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+			echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
+		else
+			cd $plex_library_directory_location
+			current_dir=$(pwd)
+			if [ "$current_dir" = "$plex_library_directory_location" ]; then
 				now=$(date +"%T")
-				echo "$now - Backup of PLEX Data Directory Complete. Moving Library_$DATE.tar to $plex_backup_dir" |& tee -a $log_file_location
-				mv Library_$DATE.tar $plex_backup_dir/Library_$DATE.tar |& tee -a $log_file_location
-				if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+				echo "$now - Backing up PLEX \"$folder_name_to_backup\" Directory.... This may take a while" |& tee -a $log_file_location
+				tar cf Library_$DATE.tar "$folder_name_to_backup"  |& tee -a $log_file_location
+				if [ -f "$plex_library_directory_location/Library_$DATE.tar" ]; then
 					now=$(date +"%T")
-					echo "$now - Moving Library_$DATE.tar Complete" |& tee -a $log_file_location
+					echo "$now - Backup of PLEX Data Directory Complete. Moving Library_$DATE.tar to $plex_backup_dir" |& tee -a $log_file_location
+					mv Library_$DATE.tar $plex_backup_dir/Library_$DATE.tar |& tee -a $log_file_location
+					if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+						now=$(date +"%T")
+						echo "$now - Moving Library_$DATE.tar Complete" |& tee -a $log_file_location
+					else
+						echo "Moving Library_$DATE.tar Failed, file does not exist in the destination directory" |& tee -a $log_file_location
+					fi
 				else
-					echo "Moving Library_$DATE.tar Failed, file does not exist in the destination directory" |& tee -a $log_file_location
+					echo "backup file Library_$DATE.tar does not exist, something went wrong" |& tee -a $log_file_location
 				fi
 			else
-				echo "backup file Library_$DATE.tar does not exist, something went wrong" |& tee -a $log_file_location
+				echo "Could not change directory to $plex_library_directory_location, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
 			fi
+		fi
+	fi
+else
+	#####################################
+	#Backup plex data directory DOCKER App
+	#####################################
+
+	if [ "$( docker container inspect -f '{{.State.Status}}' $docker_container_name )" == "running" ]; then
+		echo "PLEX Media Server Shutdown Failed, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
+	else
+		echo "PLEX Media Server Shutdown Successfully" |& tee -a $log_file_location
+		if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+			echo "Backup File $plex_backup_dir/Library_$DATE.tar already exists, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
 		else
-			echo "Could not change directory to $plex_library_directory_location, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
+			cd $plex_library_directory_location
+			current_dir=$(pwd)
+			if [ "$current_dir" = "$plex_library_directory_location" ]; then
+				now=$(date +"%T")
+				echo "$now - Backing up PLEX \"$folder_name_to_backup\" Directory.... This may take a while" |& tee -a $log_file_location
+				tar cf Library_$DATE.tar "$folder_name_to_backup"  |& tee -a $log_file_location
+				if [ -f "$plex_library_directory_location/Library_$DATE.tar" ]; then
+					now=$(date +"%T")
+					echo "$now - Backup of PLEX Data Directory Complete. Moving Library_$DATE.tar to $plex_backup_dir" |& tee -a $log_file_location
+					mv Library_$DATE.tar $plex_backup_dir/Library_$DATE.tar |& tee -a $log_file_location
+					if [ -f "$plex_backup_dir/Library_$DATE.tar" ]; then
+						now=$(date +"%T")
+						echo "$now - Moving Library_$DATE.tar Complete" |& tee -a $log_file_location
+					else
+						echo "Moving Library_$DATE.tar Failed, file does not exist in the destination directory" |& tee -a $log_file_location
+					fi
+				else
+					echo "backup file Library_$DATE.tar does not exist, something went wrong" |& tee -a $log_file_location
+				fi
+			else
+				echo "Could not change directory to $plex_library_directory_location, Skipping PLEX Data Backup Process" |& tee -a $log_file_location
+			fi
 		fi
 	fi
 fi
@@ -152,14 +217,25 @@ sleep 1
 #####################################
 #start PLEX Media Server Package 
 #####################################
-plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
-if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
-	echo "PLEX already active, skipping PLEX restart" |& tee -a $log_file_location
+if [ $installation_type -eq 0 ]; then
+	plex_status=$(/usr/syno/bin/synopkg is_onoff "$plex_package_name")
+	if [ "$plex_status" = "package $plex_package_name is turned on" ]; then
+		echo "PLEX already active, skipping PLEX restart" |& tee -a $log_file_location
+	else
+		echo |& tee -a $log_file_location
+		echo "Starting PLEX Media Server...." |& tee -a $log_file_location
+		/usr/syno/bin/synopkg start "$plex_package_name" |& tee -a $log_file_location
+		sleep 1
+	fi
 else
-	echo |& tee -a $log_file_location
-	echo "Starting PLEX Media Server...." |& tee -a $log_file_location
-	/usr/syno/bin/synopkg start "$plex_package_name" |& tee -a $log_file_location
-	sleep 1
+	if [ "$( docker container inspect -f '{{.State.Status}}' $docker_container_name )" == "running" ]; then
+		echo "PLEX already active, skipping PLEX restart" |& tee -a $log_file_location
+	else
+		echo |& tee -a $log_file_location
+		echo "Starting PLEX Media Server...." |& tee -a $log_file_location
+		docker start $docker_container_name |& tee -a $log_file_location
+		sleep 1
+	fi
 fi
 
 #####################################
